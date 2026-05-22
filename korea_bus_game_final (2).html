@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>한국 버스 타기 게임 🚌</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:#1a1a2e;display:flex;flex-direction:column;align-items:center;min-height:100vh;font-family:'Segoe UI',system-ui,sans-serif;color:#fff;padding:10px;overflow-x:hidden}
+#wrap{width:100%;max-width:720px}
+#title{text-align:center;margin-bottom:8px}
+#title h1{font-size:20px;font-weight:700}
+#title p{font-size:12px;color:#aaa;margin-top:2px}
+#hud{display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#16213e;border-radius:10px 10px 0 0;border:1px solid #2a2a4a}
+.stat{font-size:13px;color:#aaa}.stat b{color:#fff;font-size:15px}
+#lv-badge{font-size:12px;background:#1a4a8a;color:#7eb8f7;padding:3px 12px;border-radius:20px;font-weight:600}
+#cw{border:1px solid #2a2a4a;border-top:none;overflow:hidden;border-radius:0 0 10px 10px;touch-action:none}
+canvas{display:block;width:100%;height:auto}
+#hint-el{font-size:13px;color:#ccc;text-align:center;min-height:20px;margin:7px 0 3px}
+#pad{width:100%;margin-top:6px}
+#pad-main{display:flex;justify-content:space-between;align-items:center;gap:8px}
+#pad-left-col{display:flex;flex-direction:column;gap:6px}
+#pad-right-col{display:flex;flex-direction:column;gap:6px}
+.btn{background:#16213e;border:1.5px solid #2a3a5a;border-radius:12px;color:#ddd;font-size:20px;font-weight:700;cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:center;touch-action:none;transition:background .08s,transform .08s;-webkit-user-select:none}
+.btn:active,.btn.pressed{background:#1e3a6e;transform:scale(0.92)}
+#btn-left,#btn-right{width:70px;height:60px}
+#btn-down{width:70px;height:55px}
+#btn-space{flex:1;height:72px;font-size:15px;font-weight:700;background:#1a3060;border-color:#2a5090;border-radius:14px}
+#btn-space.pressed{background:#1e4a90}
+#ctrl{display:flex;gap:10px;justify-content:center;margin-top:8px}
+#sbtn{background:#2980b9;color:#fff;border:none;border-radius:8px;padding:10px 32px;font-size:15px;font-weight:600;cursor:pointer}
+#sbtn:active{background:#3498db}
+#share-row{display:flex;justify-content:center;margin-top:10px}
+#share-btn{background:#27ae60;color:#fff;border:none;border-radius:8px;padding:8px 22px;font-size:13px;cursor:pointer}
+#cheat{font-size:11px;color:#333;text-align:center;margin-top:5px}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#27ae60;color:#fff;padding:10px 22px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:999;white-space:nowrap}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="title"><h1>🚌 한국 버스 타기 게임</h1><p>버스에 타고 미니게임을 클리어하세요!</p></div>
+  <div id="hud">
+    <div id="lives-el" class="stat"></div>
+    <div class="stat">점수 <b id="sc">0</b> &nbsp;스테이지 <b id="stage-el">1</b></div>
+    <div id="lv-badge">Lv 1</div>
+  </div>
+  <div id="cw"><canvas id="c"></canvas></div>
+  <div id="hint-el">게임 시작을 눌러주세요</div>
+  <div id="ctrl"><button id="sbtn" onclick="startGame()">게임 시작</button></div>
+  <div id="pad">
+    <div id="pad-main">
+      <div id="pad-left-col">
+        <button class="btn" id="btn-left">←</button>
+        <button class="btn" id="btn-down">↓</button>
+      </div>
+      <button class="btn" id="btn-space">🚌 SPACE<br><span style="font-size:11px;opacity:.7">탑승 / 연타 / 액션</span></button>
+      <div id="pad-right-col">
+        <button class="btn" id="btn-right">→</button>
+        <div style="width:70px;height:55px"></div>
+      </div>
+    </div>
+  </div>
+  <div id="share-row"><button id="share-btn" onclick="copyLink()">🔗 링크 복사 공유</button></div>
+  <div id="cheat">치트(PC): 1탑승 2카드 3하차벨 4자리 5균형 6진상 7팔꿈치</div>
+</div>
+<div id="toast">링크 복사 완료! 😄</div>
+<script>
+const cv=document.getElementById('c'),cx=cv.getContext('2d');
+const W=680,H=300;
+cv.width=W;cv.height=H;
+
+const GY=215,BW=172,BH=90,DW=37,DOOR_OFF=BW-DW-8;
+const PX=88,PH=50;
+const CHAR_X=W*0.76,CHAR_Y=H-46;
+const CW=60,CH=38;
+const RDR_X=130,RDR_Y=108;
+const CARD_Y=RDR_Y;
+
+// ── 스테이지별 난이도 설계 ─────────────────────────
+// stage 1~5: 탑승만, 속도 증가
+// stage 6~: 기믹 추가, 각 기믹 난이도도 stage따라 증가
+function getStageConfig(stage) {
+  // 버스 속도
+  const busSpeed = stage<=1?1.0 : stage<=2?1.3 : stage<=3?1.6 : stage<=4?2.2 : stage<=5?2.8 : Math.min(2.8+((stage-5)*0.12),4.5);
+
+  // 어떤 미니게임 나올지
+  let miniPool = [];
+  if(stage>=6)  miniPool.push('card');
+  if(stage>=9)  miniPool.push('bell');
+  if(stage>=12) miniPool.push('seat');
+  if(stage>=15) miniPool.push('balance');
+  if(stage>=18) miniPool.push('thug');
+  if(stage>=21) miniPool.push('elbow');
+
+  // 미니게임 개수
+  const miniCount = stage<6?0 : stage<9?1 : stage<12?2 : stage<15?3 : stage<18?3 : stage<21?4 : 5;
+
+  // 각 기믹 난이도 (0~1, 0=쉬움 1=어려움)
+  // 새로 나올 때는 0에서 시작, 이전 기믹은 계속 올라감
+  function diff(introducedAt, stagesPerLevel) {
+    if(stage < introducedAt) return 0;
+    return Math.min((stage - introducedAt) / stagesPerLevel, 1.0);
+  }
+  return {
+    busSpeed,
+    miniPool,
+    miniCount,
+    cardDiff:    diff(6,  12), // 카드 속도
+    bellDiff:    diff(9,  12), // 벨 구간 크기+속도
+    seatDiff:    diff(12, 12), // NPC 속도
+    balanceDiff: diff(15, 10), // 균형 속도
+    thugDiff:    diff(18, 8),  // 진상 경고시간
+    elbowDiff:   diff(21, 8),  // 팔꿈치 반응시간
+  };
+}
+
+let S={};
+function newS(full){
+  if(full){S.score=0;S.lives=3;S.stage=1;}
+  const cfg=getStageConfig(S.stage);
+  S.busSpeed=cfg.busSpeed;
+  S.cfg=cfg;
+  S.busX=W+20;S.jumpY=0;S.jumpVY=0;S.transT=0;
+  S.miniQueue=[];S.miniIdx=0;
+  S.flash=0;S.flashC='red';S.pulse=0;S.ap=0;
+  S.hitX=0;S.hitY=0;S.hitVX=0;S.hitVY=0;S.hitT=0;
+  // card
+  S.cardX=CHAR_X-60;S.cardDir=-1;S.cardT=0;S.cardResult=null;S.cardDoneT=0;
+  // bell
+  S.bellPos=0;S.bellZone=0;S.bellT=0;S.bellResult=null;S.bellDoneT=0;
+  // seat
+  S.seatT=0;S.seatMyX=W*0.72;S.seatNpcX=W*0.08;S.seatTargetX=W*0.42;
+  S.seatPhase=0;S.seatNpcSpeed=0;S.seatDoneT=0;
+  // balance
+  S.balRound=0;S.balDir=0;S.balT=0;S.balShown=false;S.balDoneT=0;S.balFailed=false;
+  // thug
+  S.thugPhase=0;S.thugT=0;S.ducking=false;S.dodged=false;
+  // elbow
+  S.elbowDir=0;S.elbowT=0;S.elbowResult=null;
+  S.state='idle';
+}
+newS(true);
+
+function updHUD(){
+  document.getElementById('sc').textContent=S.score;
+  document.getElementById('stage-el').textContent=S.stage;
+  document.getElementById('lv-badge').textContent='St.'+S.stage;
+  const el=document.getElementById('lives-el');el.innerHTML='';
+  for(let i=0;i<3;i++){const sp=document.createElement('span');sp.style.fontSize='17px';sp.textContent=i<S.lives?'🚌':'💨';el.appendChild(sp);}
+}
+function hint(t){document.getElementById('hint-el').textContent=t;}
+
+// ── 배경 ──────────────────────────────────────────
+function drawOutdoor(){
+  cx.fillStyle='#c8e8ff';cx.fillRect(0,0,W,GY);
+  [[50,'#b0bec5',80,98],[172,'#90a4ae',58,116],[290,'#cfd8dc',86,84],[418,'#b0bec5',68,104],[535,'#90a4ae',94,76]].forEach(([x,c,w,h])=>{
+    cx.fillStyle=c;cx.fillRect(x,GY-h,w,h);
+    cx.fillStyle='rgba(255,255,255,0.22)';
+    for(let wy=GY-h+10;wy<GY-8;wy+=18)for(let wx=x+8;wx<x+w-8;wx+=16)cx.fillRect(wx,wy,8,10);
+  });
+  cx.fillStyle='#87ceeb';cx.beginPath();cx.arc(600,48,25,0,Math.PI*2);cx.fill();
+  cx.fillStyle='#fff';cx.beginPath();cx.arc(600,44,20,0,Math.PI*2);cx.fill();
+  cx.beginPath();cx.arc(618,46,16,0,Math.PI*2);cx.fill();
+  cx.beginPath();cx.arc(582,46,15,0,Math.PI*2);cx.fill();
+  cx.fillStyle='#6aab6a';cx.fillRect(0,GY,W,H-GY);
+  cx.fillStyle='#444';cx.fillRect(0,GY,W,13);
+  const off=(Date.now()/12)%60|0;
+  cx.fillStyle='#888';for(let x=-60+off;x<W+60;x+=60)cx.fillRect(x,GY+5,27,4);
+}
+
+function drawIndoor(){
+  cx.fillStyle='#e8f0f8';cx.fillRect(0,0,W,H);
+  cx.fillStyle='#d0e0ee';cx.fillRect(0,0,W,42);
+  cx.fillStyle='#b8cfe0';cx.fillRect(0,40,W,4);
+  cx.strokeStyle='#9ab0c8';cx.lineWidth=3;cx.beginPath();cx.moveTo(0,56);cx.lineTo(W,56);cx.stroke();
+  for(let x=55;x<W;x+=80){cx.strokeStyle='#9ab0c8';cx.lineWidth=2;cx.beginPath();cx.arc(x,56,8,0,Math.PI*2);cx.stroke();cx.beginPath();cx.moveTo(x,64);cx.lineTo(x,76);cx.stroke();}
+  const off2=(Date.now()/5)%135|0;
+  cx.fillStyle='#c8e8ff';
+  for(let x=20;x<W-60;x+=135){cx.fillRect(x,48,88,60);cx.strokeStyle='#88aac8';cx.lineWidth=2;cx.strokeRect(x,48,88,60);cx.fillStyle='#9ab8d0';cx.fillRect(x+4+(off2%65),53,15,50);cx.fillRect(x+38-(off2%50),56,12,44);cx.fillStyle='#c8e8ff';}
+  cx.fillStyle='#c0a888';cx.fillRect(0,H-42,W,42);
+  cx.fillStyle='#a89068';cx.fillRect(0,H-42,W,4);
+  for(let x=15;x<W;x+=102){cx.fillStyle='#3a80c9';cx.fillRect(x,H-76,62,34);cx.fillStyle='#2860a8';cx.fillRect(x,H-92,62,18);}
+}
+
+// ── 버스/캐릭터 ───────────────────────────────────
+function drawBus(x){
+  const y=GY-BH;
+  cx.fillStyle='#2980b9';cx.beginPath();cx.roundRect(x,y,BW,BH,7);cx.fill();
+  cx.fillStyle='#1a5f8a';cx.fillRect(x,y+BH-17,BW,17);
+  cx.fillStyle='rgba(200,240,255,0.8)';for(let i=0;i<3;i++)cx.fillRect(x+10+i*38,y+11,27,25);
+  cx.fillStyle='#1a2a3a';cx.fillRect(x+4,y+9,21,27);
+  const dx=x+DOOR_OFF,dy=y+BH-55;
+  cx.fillStyle='#1a6fa8';cx.fillRect(dx,dy,DW,53);
+  cx.fillStyle='rgba(150,210,255,0.7)';cx.fillRect(dx+2,dy+2,DW/2-2,49);cx.fillRect(dx+DW/2+1,dy+2,DW/2-3,49);
+  [24,BW-24].forEach(wx=>{cx.fillStyle='#f39c12';cx.beginPath();cx.arc(x+wx,GY+1,13,0,Math.PI*2);cx.fill();cx.fillStyle='#222';cx.beginPath();cx.arc(x+wx,GY+1,7,0,Math.PI*2);cx.fill();});
+}
+function drawDoorGuide(bx){
+  if(S.stage>3)return;
+  const doorCX=bx+DOOR_OFF+DW/2; // 문 중심 x (탑승 판정 기준)
+  const by=GY-BH-14;
+  S.ap=(S.ap+0.07)%(Math.PI*2);const b=Math.sin(S.ap)*5;
+  cx.globalAlpha=0.85+0.15*Math.sin(S.ap);cx.fillStyle='#e74c3c';
+  cx.font='bold 12px sans-serif';cx.textAlign='center';cx.fillText('여기서 탑승!',doorCX,by-24+b);
+  cx.beginPath();cx.moveTo(doorCX-10,by-14+b);cx.lineTo(doorCX+10,by-14+b);cx.lineTo(doorCX,by+b);cx.closePath();cx.fill();
+  // 판정선 표시 (플레이어 위치와 맞춰야 할 선)
+  cx.strokeStyle='rgba(231,76,60,0.5)';cx.lineWidth=2;cx.setLineDash([4,3]);
+  cx.beginPath();cx.moveTo(doorCX,GY-BH);cx.lineTo(doorCX,GY);cx.stroke();cx.setLineDash([]);
+  cx.globalAlpha=1;
+}
+// ── 직장인 플레이어 (정장, 서류가방) ─────────────────
+function drawCharOut(){
+  const py=GY-PH+S.jumpY;
+  // 머리
+  cx.fillStyle='#f0c27f';cx.fillRect(PX-6,py,12,12);
+  cx.fillStyle='#222';cx.fillRect(PX-6,py,12,4); // 머리카락
+  // 정장
+  cx.fillStyle='#1a3a6a';cx.fillRect(PX-8,py+12,16,18);
+  cx.fillStyle='#fff';cx.fillRect(PX-3,py+12,6,12); // 셔츠
+  cx.fillStyle='#c0392b';cx.fillRect(PX-1,py+13,2,9); // 넥타이
+  // 다리
+  cx.fillStyle='#1a3a6a';cx.fillRect(PX-7,py+30,5,13);cx.fillRect(PX+2,py+30,5,13);
+  // 가방
+  cx.fillStyle='#8B4513';cx.fillRect(PX+8,py+18,7,10);cx.fillRect(PX+9,py+16,5,3);
+}
+function drawChar(x,y,duck){
+  const oy=duck?17:0;
+  // 머리
+  cx.fillStyle='#f0c27f';cx.fillRect(x-12,y-88+oy,24,20);
+  cx.fillStyle='#222';cx.fillRect(x-12,y-88+oy,24,5); // 머리카락
+  if(!duck){cx.fillStyle='#333';cx.fillRect(x-6,y-72+oy,3,4);cx.fillRect(x+3,y-72+oy,3,4);} // 눈
+  // 정장
+  cx.fillStyle='#1a3a6a';cx.fillRect(x-14,y-68+oy,28,36);
+  cx.fillStyle='#fff';cx.fillRect(x-5,y-68+oy,10,20); // 셔츠
+  cx.fillStyle='#c0392b';cx.fillRect(x-2,y-67+oy,4,16); // 넥타이
+  // 재킷 라펠
+  cx.fillStyle='#152d55';cx.fillRect(x-14,y-68+oy,6,14);cx.fillRect(x+8,y-68+oy,6,14);
+  // 다리
+  cx.fillStyle='#1a3a6a';cx.fillRect(x-12,y-32+oy,10,28);cx.fillRect(x+2,y-32+oy,10,28);
+  // 구두
+  cx.fillStyle='#111';cx.fillRect(x-13,y-5+oy,11,5);cx.fillRect(x+2,y-5+oy,11,5);
+  // 가방
+  if(!duck){cx.fillStyle='#8B4513';cx.fillRect(x+14,y-55+oy,12,18);cx.fillRect(x+15,y-58+oy,10,5);}
+}
+function drawCharSit(x,y,isNpc){
+  if(isNpc){
+    // NPC: 아줌마 스타일 (꽃무늬)
+    cx.fillStyle='#f0c27f';cx.fillRect(x-13,y-58,26,20);
+    cx.fillStyle='#8B0000';cx.fillRect(x-12,y-58,24,5); // 파마머리
+    cx.fillStyle='#cc44cc';cx.fillRect(x-15,y-38,30,28); // 꽃무늬 옷
+    cx.fillStyle='#ffaaff';cx.fillRect(x-10,y-35,6,5);cx.fillRect(x+2,y-28,5,5); // 꽃무늬
+    cx.fillStyle='#222';cx.fillRect(x-13,y-10,11,14);cx.fillRect(x+2,y-10,11,14);
+  } else {
+    // 플레이어: 정장 앉은 자세
+    cx.fillStyle='#f0c27f';cx.fillRect(x-12,y-58,24,20);
+    cx.fillStyle='#222';cx.fillRect(x-12,y-58,24,5);
+    cx.fillStyle='#1a3a6a';cx.fillRect(x-14,y-38,28,28);
+    cx.fillStyle='#fff';cx.fillRect(x-5,y-38,10,16);
+    cx.fillStyle='#c0392b';cx.fillRect(x-2,y-37,4,12);
+    cx.fillStyle='#1a3a6a';cx.fillRect(x-12,y-10,11,14);cx.fillRect(x+1,y-10,11,14);
+    cx.fillStyle='#111';cx.fillRect(x-13,y+4,11,4);cx.fillRect(x+2,y+4,11,4);
+  }
+}
+
+// ── NPC 진상 (서있는) ─────────────────────────────
+function drawNpcThug(x,y,phase){
+  const angry=phase>=1;
+  // 파마머리
+  cx.fillStyle='#8B0000';cx.fillRect(x-14,y-110,28,10);
+  cx.fillStyle='#8B0000';cx.fillRect(x-16,y-102,32,6);
+  // 얼굴
+  cx.fillStyle='#f0c27f';cx.fillRect(x-12,y-104,24,26);
+  if(angry){cx.fillStyle='#c0392b';cx.fillRect(x-12,y-104,24,8);} // 홍조
+  // 눈썹
+  cx.fillStyle='#333';
+  if(angry){cx.fillRect(x-10,y-100,7,3);cx.fillRect(x+3,y-100,7,3);}
+  else{cx.fillRect(x-9,y-99,6,2);cx.fillRect(x+3,y-99,6,2);}
+  // 눈
+  cx.fillStyle='#222';cx.fillRect(x-8,y-94,4,4);cx.fillRect(x+4,y-94,4,4);
+  // 꽃무늬 옷
+  cx.fillStyle='#cc44cc';cx.fillRect(x-16,y-78,32,38);
+  cx.fillStyle='#ff88ff';cx.fillRect(x-10,y-74,6,6);cx.fillRect(x+4,y-68,5,5);cx.fillRect(x-6,y-62,5,5);
+  // 비닐봉지
+  cx.fillStyle='rgba(255,255,255,0.7)';cx.fillRect(x+16,y-72,10,18);
+  cx.strokeStyle='#aaa';cx.lineWidth=1;cx.beginPath();cx.moveTo(x+19,y-72);cx.lineTo(x+23,y-80);cx.stroke();
+  // 다리
+  cx.fillStyle='#222';cx.fillRect(x-14,y-40,12,40);cx.fillRect(x+2,y-40,12,40);
+  // 신발
+  cx.fillStyle='#c0392b';cx.fillRect(x-15,y,13,5);cx.fillRect(x+2,y,13,5);
+}
+
+// ── NPC 자리경쟁 (달리는 아저씨) ─────────────────
+function drawNpcRunner(x,y,run){
+  cx.fillStyle='#f0c27f';cx.fillRect(x-12,y-86,24,20);
+  cx.fillStyle='#555';cx.fillRect(x-12,y-86,24,5);
+  cx.fillStyle='#333';cx.fillRect(x-7,y-72,3,4);cx.fillRect(x+4,y-72,3,4);
+  cx.fillStyle='#888';cx.fillRect(x-14,y-66,28,34);
+  cx.fillStyle='#333';
+  if(run){cx.fillRect(x-12,y-32,10,22);cx.fillRect(x+2,y-28,10,22);}
+  else{cx.fillRect(x-12,y-32,10,26);cx.fillRect(x+2,y-28,10,18);}
+}
+
+// ── 카드씬 ────────────────────────────────────────
+function drawCardScene(){
+  const matched=!S.cardResult&&Math.abs(S.cardX-RDR_X)<14;
+  const bx=RDR_X-14,by=RDR_Y-62,bw=CW+28,bh=CW+70;
+  cx.fillStyle='#8899aa';cx.fillRect(RDR_X+CW/2-4,0,8,by);
+  cx.fillStyle='#667788';cx.fillRect(RDR_X+CW/2-12,by-10,24,12);
+  cx.fillStyle='#2c3e50';cx.beginPath();cx.roundRect(bx,by,bw,bh,10);cx.fill();
+  cx.fillStyle=matched?'#1abc9c':'#1a6fa8';
+  cx.beginPath();cx.roundRect(bx+7,by+8,bw-14,42,5);cx.fill();
+  cx.fillStyle='#fff';cx.font='bold 11px sans-serif';cx.textAlign='center';
+  cx.fillText('교통카드',RDR_X+CW/2,by+24);
+  cx.font='9px sans-serif';cx.fillStyle='rgba(255,255,255,0.85)';
+  cx.fillText(matched?'인식중...':'카드를 대세요',RDR_X+CW/2,by+38);
+  cx.fillStyle=matched?'rgba(26,188,156,0.4)':'rgba(241,196,15,0.1)';
+  cx.fillRect(RDR_X,RDR_Y,CW,CH);
+  cx.strokeStyle=matched?'#1abc9c':'#f1c40f';
+  cx.lineWidth=2.5;cx.setLineDash([6,3]);cx.strokeRect(RDR_X,RDR_Y,CW,CH);cx.setLineDash([]);
+  if(matched){
+    S.pulse=(S.pulse+0.18)%(Math.PI*2);
+    cx.globalAlpha=0.28+0.22*Math.sin(S.pulse);
+    cx.strokeStyle='#1abc9c';cx.lineWidth=5;cx.strokeRect(bx-3,by-3,bw+6,bh+6);cx.globalAlpha=1;
+  }
+  cx.fillStyle='#fff';cx.fillRect(S.cardX,CARD_Y,CW,CH);
+  cx.fillStyle='#1a6fa8';cx.fillRect(S.cardX+3,CARD_Y+5,CW-6,10);
+  cx.fillStyle='#f1c40f';cx.font='bold 8px sans-serif';cx.textAlign='center';cx.fillText('교통카드',S.cardX+CW/2,CARD_Y+13);
+  cx.fillStyle='#e74c3c';cx.fillRect(S.cardX+3,CARD_Y+17,CW/2-2,4);
+  cx.fillStyle='#aaa';cx.fillRect(S.cardX+3,CARD_Y+24,CW-6,3);
+  cx.strokeStyle=matched?'#1abc9c':'#f1c40f';
+  cx.lineWidth=2.5;cx.setLineDash([6,3]);cx.strokeRect(S.cardX,CARD_Y,CW,CH);cx.setLineDash([]);
+  drawChar(CHAR_X,CHAR_Y,false);
+  const armEndX=S.cardX+CW;
+  if(armEndX<CHAR_X-15){cx.fillStyle='#e74c3c';cx.fillRect(armEndX,CHAR_Y-62,CHAR_X-15-armEndX,10);}
+  cx.fillStyle='#f0c27f';cx.fillRect(S.cardX+CW-6,CHAR_Y-66,12,16);
+  cx.textAlign='center';
+  if(matched){cx.fillStyle='#1abc9c';cx.font='bold 16px sans-serif';cx.fillText('딱! 지금 SPACE!',W/2,H-10);}
+  else if(!S.cardResult){cx.fillStyle='#888';cx.font='13px sans-serif';cx.fillText('카드를 단말기 네모에 맞춰 Space!',W/2,H-10);}
+  if(S.cardResult==='ok'){cx.fillStyle='rgba(0,0,0,0.35)';cx.fillRect(0,0,W,H);cx.fillStyle='#2ecc71';cx.font='bold 28px sans-serif';cx.textAlign='center';cx.fillText('삑! 인식완료 ✅',W/2,H/2);}
+  else if(S.cardResult==='miss'){cx.fillStyle='rgba(0,0,0,0.35)';cx.fillRect(0,0,W,H);cx.fillStyle='#e74c3c';cx.font='bold 24px sans-serif';cx.textAlign='center';cx.fillText('삑— 인식실패 ❌',W/2,H/2);}
+  if(!S.cardResult){const bw2=(1-Math.min(S.cardT/360,1))*(W-40);cx.fillStyle='#333';cx.fillRect(20,10,W-40,8);cx.fillStyle=bw2>(W-40)*0.3?'#2ecc71':'#e74c3c';cx.fillRect(20,10,bw2,8);cx.strokeStyle='#444';cx.lineWidth=1;cx.strokeRect(20,10,W-40,8);}
+}
+
+// ── 하차벨씬 ──────────────────────────────────────
+function drawBellScene(){
+  cx.fillStyle='#222';cx.font='bold 15px sans-serif';cx.textAlign='center';cx.fillText('하차벨 타이밍!',W/2,60);
+  const barX=65,barW=W-130,barY=86;
+  cx.fillStyle='#333';cx.fillRect(barX,barY,barW,24);
+  const zoneW=Math.max(45,75-S.cfg.bellDiff*35);
+  const zx=barX+S.bellZone*(barW/100);
+  cx.fillStyle='rgba(39,174,96,0.3)';cx.fillRect(zx,barY,zoneW,24);
+  cx.strokeStyle='#27ae60';cx.lineWidth=2;cx.strokeRect(zx,barY,zoneW,24);
+  cx.fillStyle='#555';cx.font='11px sans-serif';cx.textAlign='left';cx.fillText('출발',barX,barY-4);cx.textAlign='right';cx.fillText('종점',barX+barW,barY-4);
+  const px=barX+(S.bellPos/100)*barW;
+  cx.fillStyle='#e74c3c';cx.beginPath();cx.arc(px,barY+12,11,0,Math.PI*2);cx.fill();
+  cx.strokeStyle='#444';cx.lineWidth=1;cx.strokeRect(barX,barY,barW,24);
+  if(!S.bellResult){cx.fillStyle='#666';cx.font='12px sans-serif';cx.textAlign='center';cx.fillText('초록 구간에서 Space!',W/2,78);}
+  drawChar(CHAR_X,CHAR_Y,false);
+  if(S.bellResult==='ok'){cx.fillStyle='rgba(0,0,0,0.32)';cx.fillRect(0,0,W,H);cx.fillStyle='#2ecc71';cx.font='bold 24px sans-serif';cx.textAlign='center';cx.fillText('딩동~ 하차벨 ✅',W/2,H/2);}
+  else if(S.bellResult==='miss-early'){cx.fillStyle='rgba(0,0,0,0.32)';cx.fillRect(0,0,W,H);cx.fillStyle='#e74c3c';cx.font='bold 22px sans-serif';cx.textAlign='center';cx.fillText('너무 빨랐다... 😳',W/2,H/2);}
+  else if(S.bellResult==='miss-late'){cx.fillStyle='rgba(0,0,0,0.32)';cx.fillRect(0,0,W,H);cx.fillStyle='#e74c3c';cx.font='bold 22px sans-serif';cx.textAlign='center';cx.fillText('정류장 지나침! 😱',W/2,H/2);}
+}
+
+// ── 자리앉기씬 ────────────────────────────────────
+function drawSeatScene(){
+  const seatX=S.seatTargetX,seatY=H-44;
+  if(S.seatPhase===0||S.seatPhase===1){
+    S.pulse=(S.pulse+0.08)%(Math.PI*2);
+    cx.fillStyle=`rgba(255,220,0,${0.15+0.1*Math.sin(S.pulse)})`;cx.fillRect(seatX-34,seatY-90,68,50);
+    cx.strokeStyle='#f1c40f';cx.lineWidth=2;cx.setLineDash([5,3]);cx.strokeRect(seatX-34,seatY-90,68,50);cx.setLineDash([]);
+    cx.fillStyle='#f1c40f';cx.font='bold 11px sans-serif';cx.textAlign='center';cx.fillText('빈 자리!',seatX,seatY-96);
+  }
+  if(S.seatPhase===3){drawCharSit(S.seatNpcX,seatY,true);}
+  else{ drawNpcRunner(S.seatNpcX,seatY,(S.seatT%10)<5); }
+  if(S.seatPhase===2){
+    drawCharSit(S.seatMyX,seatY,false);
+    cx.font='18px sans-serif';cx.textAlign='center';
+    ['⭐','✨','🎉'].forEach((e,i)=>cx.fillText(e,S.seatMyX-28+i*28,seatY-98+Math.sin(S.seatT*0.1+i)*7));
+  } else {
+    const mr=(S.seatT%10)<5;
+    cx.fillStyle='#f0c27f';cx.fillRect(S.seatMyX-12,seatY-86,24,20);
+    cx.fillStyle='#e74c3c';cx.fillRect(S.seatMyX-14,seatY-66,28,34);
+    cx.fillStyle='#2c3e50';
+    if(mr){cx.fillRect(S.seatMyX-12,seatY-32,10,22);cx.fillRect(S.seatMyX+2,seatY-28,10,22);}
+    else{cx.fillRect(S.seatMyX-12,seatY-32,10,26);cx.fillRect(S.seatMyX+2,seatY-28,10,18);}
+    cx.fillStyle='#333';cx.fillRect(S.seatMyX-7,seatY-78,4,5);cx.fillRect(S.seatMyX+3,seatY-78,4,5);
+  }
+  const totalD=W*0.72-S.seatTargetX;const myD=S.seatMyX-S.seatTargetX;const prog=Math.max(0,Math.min(1,1-myD/totalD));
+  cx.fillStyle='#333';cx.fillRect(W/2-130,78,260,14);cx.fillStyle='#e74c3c';cx.fillRect(W/2-130,78,260*prog,14);cx.strokeStyle='#555';cx.lineWidth=1;cx.strokeRect(W/2-130,78,260,14);
+  cx.font='bold 14px sans-serif';cx.textAlign='center';
+  if(S.seatPhase===0){cx.fillStyle='#2c3e50';cx.fillText('빈 자리! Space 연타로 달려가!',W/2,60);}
+  else if(S.seatPhase===1){cx.fillStyle='#e74c3c';cx.fillText('도착! ↓ 눌러서 앉아!',W/2,60);}
+  else if(S.seatPhase===2){cx.fillStyle='#2ecc71';cx.fillText('먼저 앉았다! 😎',W/2,60);}
+  else if(S.seatPhase===3){cx.fillStyle='#e74c3c';cx.fillText('자리 빼앗겼다! 😭',W/2,60);}
+}
+
+// ── 균형잡기씬 ────────────────────────────────────
+// 버스가 기울어지는 방향 보여주고 → 반대키 누르기 x3
+function drawBalanceScene(){
+  // 버스 기울기 시각화
+  const tiltAmt = S.balShown ? (S.balDir<0?-1:1)*28 : 0;
+  cx.save();
+  cx.translate(W/2,H/2+10);
+  cx.rotate(tiltAmt*0.018);
+  // 미니 버스 실루엣
+  cx.fillStyle='#2980b9';cx.beginPath();cx.roundRect(-90,-55,180,80,8);cx.fill();
+  cx.fillStyle='#1a5f8a';cx.fillRect(-90,20,180,14);
+  cx.fillStyle='rgba(200,240,255,0.7)';
+  [-55,-15,25].forEach(wx=>cx.fillRect(wx,-48,28,22));
+  cx.fillStyle='#f39c12';cx.beginPath();cx.arc(-65,38,11,0,Math.PI*2);cx.fill();cx.beginPath();cx.arc(65,38,11,0,Math.PI*2);cx.fill();
+  cx.fillStyle='#222';cx.beginPath();cx.arc(-65,38,6,0,Math.PI*2);cx.fill();cx.beginPath();cx.arc(65,38,6,0,Math.PI*2);cx.fill();
+  cx.restore();
+
+  // 방향 화살표 (크고 명확하게)
+  if(S.balShown && !S.balFailed){
+    S.pulse=(S.pulse+0.1)%(Math.PI*2);
+    const alpha=0.7+0.3*Math.sin(S.pulse);
+    cx.globalAlpha=alpha;
+    cx.fillStyle='#e74c3c';
+    if(S.balDir<0){
+      // 왼쪽으로 기울 → 왼쪽 화살표 (반대: 오른쪽 눌러야)
+      cx.font='bold 48px sans-serif';cx.textAlign='center';
+      cx.fillText('←',W*0.28,H*0.55);
+    } else {
+      cx.font='bold 48px sans-serif';cx.textAlign='center';
+      cx.fillText('→',W*0.72,H*0.55);
+    }
+    cx.globalAlpha=1;
+    cx.fillStyle='#fff';cx.font='bold 13px sans-serif';cx.textAlign='center';
+    cx.fillText('버스가 '+(S.balDir<0?'왼쪽':'오른쪽')+'으로 기울었다!',W/2,H-30);
+    cx.fillStyle='#2ecc71';cx.font='bold 14px sans-serif';
+    cx.fillText('반대 방향 → '+(S.balDir<0?'→ 오른쪽':'← 왼쪽')+'!',W/2,H-12);
+  }
+
+  // 진행도 (동그라미 3개)
+  const rounds=3;
+  for(let i=0;i<rounds;i++){
+    cx.beginPath();cx.arc(W/2-28+i*28,22,9,0,Math.PI*2);
+    cx.fillStyle=i<S.balRound?'#2ecc71':'#333';cx.fill();
+    cx.strokeStyle=i<S.balRound?'#27ae60':'#555';cx.lineWidth=2;cx.stroke();
+  }
+  cx.fillStyle='#aaa';cx.font='11px sans-serif';cx.textAlign='center';cx.fillText(S.balRound+'/3',W/2,36);
+
+  if(S.balFailed){cx.fillStyle='rgba(0,0,0,0.4)';cx.fillRect(0,0,W,H);cx.fillStyle='#e74c3c';cx.font='bold 24px sans-serif';cx.textAlign='center';cx.fillText('넘어졌다! 😵',W/2,H/2);}
+  if(S.balRound>=3){cx.fillStyle='rgba(0,0,0,0.35)';cx.fillRect(0,0,W,H);cx.fillStyle='#2ecc71';cx.font='bold 24px sans-serif';cx.textAlign='center';cx.fillText('균형 완료! 👍',W/2,H/2);}
+}
+
+// ── 진상씬 ────────────────────────────────────────
+function drawThugScene(){
+  const tx=W*0.3,ty=H-46;
+  drawNpcThug(tx,ty,S.thugPhase);
+  if(S.thugPhase===2){
+    const ext=Math.min(S.thugT/15,1)*68;
+    cx.fillStyle='#c0392b';cx.fillRect(tx+18,ty-74,ext,13);cx.fillRect(tx+14+ext,ty-80,18,22);
+    if(S.thugT<13){cx.strokeStyle='#e74c3c';cx.lineWidth=2;for(let a=0;a<6;a++){const ag=(a/6)*Math.PI*2;cx.beginPath();cx.moveTo(tx+18+ext+9,ty-68);cx.lineTo(tx+18+ext+9+Math.cos(ag)*22,ty-68+Math.sin(ag)*22);cx.stroke();}}
+  } else if(S.thugPhase===1){
+    S.pulse=(S.pulse+0.14)%(Math.PI*2);cx.globalAlpha=0.7+0.3*Math.sin(S.pulse);
+    cx.fillStyle='#e74c3c';cx.beginPath();cx.roundRect(tx+4,ty-148,98,30,6);cx.fill();
+    cx.fillStyle='#fff';cx.font='bold 12px sans-serif';cx.textAlign='left';cx.fillText('비켜!! ↓ 눌러요!',tx+8,ty-128);cx.globalAlpha=1;
+  }
+  if(S.thugPhase===0){cx.fillStyle='#666';cx.font='13px sans-serif';cx.textAlign='center';cx.fillText('조심해! 진상 승객이 있어요...',W/2,H-12);}
+  drawChar(CHAR_X,CHAR_Y,S.ducking);
+}
+
+// ── 팔꿈치씬 ──────────────────────────────────────
+function drawElbowScene(){
+  cx.fillStyle='#222';cx.font='bold 14px sans-serif';cx.textAlign='center';
+  cx.fillText('팔꿈치 공격! '+(S.elbowDir<0?'← 왼쪽':'→ 오른쪽')+' 피해!',W/2,60);
+  const ax=S.elbowDir<0?W*0.32:W*0.54,ay=CHAR_Y-62;
+  const ext=Math.min(S.elbowT/22,1)*62;
+  cx.fillStyle='#7f1f1f';cx.fillRect(ax-18,ay-30,36,42);cx.fillStyle='#c0392b';cx.fillRect(ax-14,ay-58,28,30);
+  cx.fillStyle='#333';cx.fillRect(ax-12,ay+12,10,28);cx.fillRect(ax+2,ay+12,10,28);
+  cx.fillStyle='#c0392b';
+  if(S.elbowDir>0){cx.fillRect(ax+18,ay,ext,13);cx.fillRect(ax+14+ext,ay-6,15,20);}
+  else{cx.fillRect(ax-18-ext,ay,ext,13);cx.fillRect(ax-30-ext,ay-6,15,20);}
+  if(!S.elbowResult){S.pulse=(S.pulse+0.12)%(Math.PI*2);cx.globalAlpha=0.7+0.3*Math.sin(S.pulse);cx.fillStyle='#e74c3c';cx.font='bold 24px sans-serif';cx.textAlign='center';cx.fillText(S.elbowDir<0?'←':'→',W/2,H-12);cx.globalAlpha=1;}
+  drawChar(CHAR_X,CHAR_Y,false);
+  if(S.elbowResult==='ok'){cx.fillStyle='rgba(0,0,0,0.32)';cx.fillRect(0,0,W,H);cx.fillStyle='#2ecc71';cx.font='bold 24px sans-serif';cx.textAlign='center';cx.fillText('잘 피했다! 👏',W/2,H/2);}
+  else if(S.elbowResult==='fail'){cx.fillStyle='rgba(0,0,0,0.32)';cx.fillRect(0,0,W,H);cx.fillStyle='#e74c3c';cx.font='bold 24px sans-serif';cx.textAlign='center';cx.fillText('팔꿈치 맞았다! 💥',W/2,H/2);}
+}
+
+function drawFlash(){if(S.flash<=0)return;cx.globalAlpha=S.flash;cx.fillStyle=S.flashC;cx.fillRect(0,0,W,H);cx.globalAlpha=1;S.flash-=0.05;}
+
+// ── 메인 루프 ──────────────────────────────────────
+let raf;
+function loop(){
+  cx.clearRect(0,0,W,H);
+  const st=S.state;
+
+  // 탑승씬
+  if(st==='boarding'||st==='jumping'||st==='fail_board'){
+    drawOutdoor();
+    if(st==='boarding'){S.busX-=S.busSpeed;if(S.busX<-BW-20){loseLife();return;}}
+    if(st==='jumping'){
+      S.busX-=S.busSpeed;S.jumpVY+=1.3;S.jumpY+=S.jumpVY;
+      if(S.jumpY>=0){
+        S.jumpY=0;
+        if(Math.abs((S.busX+DOOR_OFF+DW/2)-PX)<22){S.state='transition';S.transT=0;}
+        else{S.state='fail_board';S.flashC='rgba(220,50,50,0.3)';S.flash=0.8;setTimeout(()=>loseLife(),700);}
+      }
+    }
+    drawBus(S.busX);drawDoorGuide(S.busX);drawCharOut();
+    if(st==='fail_board'){cx.fillStyle='#c0392b';cx.font='bold 20px sans-serif';cx.textAlign='center';cx.fillText('버스 놓쳤다! 😭',W/2,H/2);}
+  }
+
+  // 전환
+  else if(st==='transition'){
+    drawIndoor();S.transT++;
+    const t=S.transT/55;
+    cx.fillStyle=`rgba(0,0,0,${Math.max(0,1-t*2)})`;cx.fillRect(0,0,W,H);
+    if(t>0.35&&t<0.85){cx.globalAlpha=Math.min((t-0.35)*5,1)*Math.max(0,1-(t-0.65)*7);cx.fillStyle='#fff';cx.font='bold 22px sans-serif';cx.textAlign='center';cx.fillText('탑승 성공! 🎉',W/2,H/2);cx.globalAlpha=1;}
+    if(S.transT>=62){S.miniQueue=buildMiniQueue();S.miniIdx=0;startNextMini();}
+  }
+
+  // 카드
+  else if(st==='card'){
+    drawIndoor();
+    if(!S.cardResult){
+      const spd=1.4+S.cfg.cardDiff*2.5;
+      S.cardX+=S.cardDir*spd;
+      if(S.cardX>CHAR_X-55||S.cardX<RDR_X-80)S.cardDir*=-1;
+      S.cardT++;
+      if(S.cardT>Math.max(180,360-S.cfg.cardDiff*180)){S.cardResult='miss';S.flashC='rgba(220,50,50,0.3)';S.flash=0.6;setTimeout(()=>getHit(),800);}
+    } else if(S.cardResult==='ok'){S.cardDoneT++;if(S.cardDoneT>60){miniSuccess();return;}}
+    drawCardScene();
+  }
+
+  // 하차벨
+  else if(st==='bell'){
+    drawIndoor();
+    if(!S.bellResult){
+      const spd=0.38+S.cfg.bellDiff*0.35;
+      S.bellPos+=spd;
+      if(S.bellPos>100){S.bellResult='miss-late';S.flashC='rgba(220,50,50,0.32)';S.flash=0.7;setTimeout(()=>getHit(),800);}
+    } else if(S.bellResult==='ok'){S.bellDoneT++;if(S.bellDoneT>60){miniSuccess();return;}}
+    drawBellScene();
+    if(!S.bellResult){const bw=(1-Math.min(S.bellPos/100,1))*(W-40);cx.fillStyle='#333';cx.fillRect(20,10,W-40,8);cx.fillStyle=bw>(W-40)*0.3?'#2ecc71':'#e74c3c';cx.fillRect(20,10,bw,8);cx.strokeStyle='#444';cx.lineWidth=1;cx.strokeRect(20,10,W-40,8);}
+  }
+
+  // 자리
+  else if(st==='seat'){
+    drawIndoor();S.seatT++;
+    if(S.seatPhase===0){
+      S.seatNpcX+=S.seatNpcSpeed;
+      if(S.seatNpcX>=S.seatTargetX-20){S.seatPhase=3;S.seatNpcX=S.seatTargetX;S.flash=0.8;S.flashC='rgba(220,50,50,0.4)';setTimeout(()=>getHit(),1000);}
+      if(S.seatMyX<=S.seatTargetX+20){S.seatPhase=1;hint('↓ 눌러서 앉기!');}
+    } else if(S.seatPhase===2){S.seatDoneT++;if(S.seatDoneT>80){miniSuccess();return;}}
+    drawSeatScene();
+  }
+
+  // 균형
+  else if(st==='balance'){
+    drawIndoor();S.balT++;
+    if(!S.balFailed&&S.balRound<3){
+      if(!S.balShown){
+        // 방향 보여주는 시간
+        if(S.balT===1){
+          S.balDir=Math.random()<0.5?-1:1;
+          S.balShown=true;
+        }
+      }
+      // 반응시간: 난이도 높을수록 짧아짐
+      const timeLimit=Math.max(40,90-S.cfg.balanceDiff*55);
+      if(S.balShown&&S.balT>timeLimit){
+        // 시간 초과 → 실패
+        S.balFailed=true;S.flash=0.85;S.flashC='rgba(220,50,50,0.42)';
+        setTimeout(()=>getHit(),700);
+      }
+    }
+    if(S.balRound>=3){S.balDoneT++;if(S.balDoneT>60){miniSuccess();return;}}
+    drawBalanceScene();
+    // 반응시간 바
+    if(S.balShown&&!S.balFailed&&S.balRound<3){
+      const timeLimit=Math.max(40,90-S.cfg.balanceDiff*55);
+      const bw=(1-Math.min(S.balT/timeLimit,1))*(W-40);
+      cx.fillStyle='#333';cx.fillRect(20,10,W-40,8);
+      cx.fillStyle=bw>(W-40)*0.4?'#2ecc71':'#e74c3c';cx.fillRect(20,10,bw,8);
+      cx.strokeStyle='#444';cx.lineWidth=1;cx.strokeRect(20,10,W-40,8);
+    }
+  }
+
+  // 진상
+  else if(st==='thug'){
+    drawIndoor();S.thugT++;
+    const warnTime=Math.max(30,60-S.cfg.thugDiff*35);
+    const punchTime=Math.max(12,26-S.cfg.thugDiff*15);
+    if(S.thugPhase===0&&S.thugT>70){S.thugPhase=1;S.thugT=0;}
+    if(S.thugPhase===1&&S.thugT>warnTime){S.thugPhase=2;S.thugT=0;}
+    if(S.thugPhase===2&&S.thugT>punchTime){if(!S.dodged){getHit();return;}else{miniSuccess();return;}}
+    drawThugScene();
+  }
+
+  // 팔꿈치
+  else if(st==='elbow'){
+    drawIndoor();S.elbowT++;
+    const reactTime=Math.max(24,52-S.cfg.elbowDiff*30);
+    if(!S.elbowResult){
+      if(S.elbowT>reactTime){S.elbowResult='fail';S.flash=0.85;S.flashC='rgba(220,50,50,0.42)';setTimeout(()=>getHit(),700);}
+    } else if(S.elbowResult==='ok'){S.elbowT++;if(S.elbowT>55){miniSuccess();return;}}
+    drawElbowScene();
+  }
+
+  // 라운드 성공
+  else if(st==='round_ok'){
+    drawIndoor();S.transT++;
+    cx.fillStyle='rgba(0,0,0,0.4)';cx.fillRect(0,0,W,H);
+    cx.fillStyle='#fff';cx.font='bold 26px sans-serif';cx.textAlign='center';cx.fillText('완료! 🎉 +1',W/2,H/2-16);
+    cx.font='15px sans-serif';cx.fillStyle='#ddd';cx.fillText('점수 '+S.score+' | 스테이지 '+S.stage,W/2,H/2+14);
+    if(S.transT>85)nextRound();
+  }
+
+  // 히트
+  else if(st==='hit'){
+    drawIndoor();S.hitVY+=1.2;S.hitX+=S.hitVX;S.hitY+=S.hitVY;S.hitT++;
+    cx.save();cx.translate(S.hitX,S.hitY);cx.rotate(S.hitT*0.13);drawChar(0,0,false);cx.restore();
+    if(S.hitY>H+70||S.hitT>95){loseLife();return;}
+  }
+
+  drawFlash();
+  raf=requestAnimationFrame(loop);
+}
+
+// ── 미니게임 큐 빌드 ──────────────────────────────
+function buildMiniQueue(){
+  const pool=[...S.cfg.miniPool];
+  const n=Math.min(S.cfg.miniCount,pool.length);
+  const out=[];
+  for(let i=0;i<n;i++){const idx=Math.floor(Math.random()*pool.length);out.push(pool.splice(idx,1)[0]);}
+  return out;
+}
+
+function startNextMini(){
+  if(S.miniIdx>=S.miniQueue.length){
+    S.score++;updHUD();S.state='round_ok';S.transT=0;return;
+  }
+  const m=S.miniQueue[S.miniIdx];
+  S.state=m;S.flash=0;S.pulse=0;
+  if(m==='card'){S.cardX=CHAR_X-60;S.cardDir=-1;S.cardT=0;S.cardResult=null;S.cardDoneT=0;hint('카드를 단말기 네모에 맞춰 Space!');}
+  if(m==='bell'){S.bellPos=0;S.bellZone=22+Math.random()*42;S.bellT=0;S.bellResult=null;S.bellDoneT=0;hint('초록 구간에서 Space!');}
+  if(m==='seat'){S.seatT=0;S.seatMyX=W*0.72;S.seatNpcX=W*0.08;S.seatTargetX=W*0.42;S.seatPhase=0;S.seatNpcSpeed=0.45+S.cfg.seatDiff*0.6;S.seatDoneT=0;hint('Space 연타 → ↓ 앉기!');}
+  if(m==='balance'){S.balRound=0;S.balDir=0;S.balT=0;S.balShown=false;S.balDoneT=0;S.balFailed=false;hint('버스 기울기 반대 방향 키!');}
+  if(m==='thug'){S.thugPhase=0;S.thugT=0;S.ducking=false;S.dodged=false;hint('↓ 화살표로 고개 숙이기!');}
+  if(m==='elbow'){S.elbowDir=Math.random()<0.5?-1:1;S.elbowT=0;S.elbowResult=null;hint((S.elbowDir<0?'←':'→')+' 눌러서 회피!');}
+}
+
+function miniSuccess(){S.miniIdx++;S.flash=0.4;S.flashC='rgba(39,174,96,0.22)';S.pulse=0;startNextMini();}
+function getHit(){S.state='hit';S.hitX=CHAR_X;S.hitY=CHAR_Y;S.hitVX=7;S.hitVY=-11;S.hitT=0;S.flash=1;S.flashC='rgba(220,50,50,0.52)';}
+function loseLife(){S.lives--;updHUD();if(S.lives<=0){gameOver();return;}newS(false);S.state='boarding';raf=requestAnimationFrame(loop);}
+function nextRound(){
+  S.stage++;
+  newS(false);
+  S.state='boarding';updHUD();
+  raf=requestAnimationFrame(loop);
+}
+// ── 지각 메신저 스토리 ────────────────────────────
+const STORIES=[
+  {me:'버스가 문이 닫혀서 못 탔습니다… 죄송합니다',boss:'회사 문도 슬슬 닫히고 있네.'},
+  {me:'버스가 눈앞에서 출발했습니다. 죄송합니다',boss:'평가 시즌도 그렇게 지나갔지.'},
+  {me:'오늘 유독 길이 막혀서 늦었습니다. 죄송합니다',boss:'자네 커리어도 지금 좀 막혀있어.'},
+  {me:'버스를 놓쳐서 오늘 지각입니다. 죄송합니다',boss:'버스 환승은 못해도 회사 환승은 어떤가, 자네.'},
+  {me:'버스 기사님이랑 눈이 마주쳤는데 그냥 가셨어요…',boss:'그 눈빛, 나랑 마주쳤으면 큰일 날 뻔했네.'},
+  {me:'한 정거장 전에 내렸습니다… 죄송합니다',boss:'커리어도 늘 목적지 전에 멈추더군.'},
+  {me:'다음 차 기다리느라 늦었습니다. 죄송합니다',boss:'회사도 다음 사람 기다릴 수도 있지.'},
+];
+
+let goStory=null,goPhase=0,goT=0,goTypedMe='',goTypedBoss='',goRaf=null;
+
+function gameOver(){
+  S.state='gameover';
+  cancelAnimationFrame(raf);
+  cancelAnimationFrame(goRaf);
+  goStory=STORIES[Math.floor(Math.random()*STORIES.length)];
+  goPhase=0;goT=0;goTypedMe='';goTypedBoss='';
+  document.getElementById('sbtn').textContent='🚌 다시 출근하기';
+  document.getElementById('sbtn').style.display='';
+  goLoop();
+}
+
+function drawMsgBubble(text,isMe,yTop){
+  const lines=text.split('\n');
+  const maxLineLen=lines.reduce((m,l)=>Math.max(m,cx.measureText(l).width),0);
+  const bw=Math.min(W*0.62,maxLineLen+28);
+  const lineH=22;
+  const bh=lines.length*lineH+20;
+  if(isMe){
+    const bx=W-bw-46;
+    cx.fillStyle='#4a9eff';
+    cx.beginPath();cx.roundRect(bx,yTop,bw,bh,12);cx.fill();
+    // 꼬리
+    cx.beginPath();cx.moveTo(W-46,yTop+14);cx.lineTo(W-36,yTop+8);cx.lineTo(W-36,yTop+22);cx.fill();
+    // 프사
+    cx.fillStyle='#1a3a6a';cx.beginPath();cx.arc(W-24,yTop+16,14,0,Math.PI*2);cx.fill();
+    cx.fillStyle='#fff';cx.font='bold 10px sans-serif';cx.textAlign='center';cx.fillText('나',W-24,yTop+20);
+    // 텍스트
+    cx.fillStyle='#fff';cx.font='14px sans-serif';cx.textAlign='left';
+    lines.forEach((l,i)=>cx.fillText(l,bx+12,yTop+20+i*lineH));
+  } else {
+    const bx=46;
+    cx.fillStyle='#2d2d2d';
+    cx.beginPath();cx.roundRect(bx,yTop,bw,bh,12);cx.fill();
+    // 꼬리
+    cx.beginPath();cx.moveTo(46,yTop+14);cx.lineTo(36,yTop+8);cx.lineTo(36,yTop+22);cx.fill();
+    // 프사
+    cx.fillStyle='#8B0000';cx.beginPath();cx.arc(20,yTop+16,14,0,Math.PI*2);cx.fill();
+    cx.fillStyle='#fff';cx.font='bold 9px sans-serif';cx.textAlign='center';cx.fillText('팀장',20,yTop+20);
+    // 텍스트
+    cx.fillStyle='#eee';cx.font='14px sans-serif';cx.textAlign='left';
+    lines.forEach((l,i)=>cx.fillText(l,bx+12,yTop+20+i*lineH));
+  }
+  return bh;
+}
+
+function goLoop(){
+  if(S.state!=='gameover')return;
+  cx.clearRect(0,0,W,H);
+  goT++;
+
+  // ── phase 0: 캐릭터가 폰 들고 타이핑 ──
+  if(goPhase===0){
+    drawIndoor();
+    cx.fillStyle='rgba(0,0,0,0.6)';cx.fillRect(0,0,W,H);
+    // 캐릭터
+    drawChar(W/2,H-50,false);
+    // 폰 (손 앞에)
+    const px=W/2+10,py=H-115;
+    cx.fillStyle='#111';cx.beginPath();cx.roundRect(px,py,48,72,7);cx.fill();
+    cx.fillStyle='#1a1a2e';cx.beginPath();cx.roundRect(px+3,py+6,42,56,4);cx.fill();
+    // 타이핑 점 애니메이션
+    const d=Math.floor(goT/10)%4;
+    cx.fillStyle='#4a9eff';cx.font='bold 18px sans-serif';cx.textAlign='center';
+    cx.fillText('• '.repeat(d).trim(),px+24,py+38);
+    // 말풍선이 위로 올라오는 연출
+    cx.fillStyle='rgba(74,158,255,0.15)';cx.beginPath();cx.roundRect(W/2-80,H-180,160,40,10);cx.fill();
+    cx.fillStyle='#4a9eff';cx.font='12px sans-serif';cx.textAlign='center';
+    cx.fillText('메시지 입력 중...  ✍️',W/2,H-154);
+    if(goT>70){goPhase=1;goT=0;}
+  }
+
+  // ── phase 1~3: 핸드폰 확대 전환 후 채팅 UI ──
+  else{
+    // 확대 애니메이션 (phase1 초반)
+    const expandDone = goT>15;
+
+    if(!expandDone){
+      // 폰이 커지는 효과
+      const prog=goT/15;
+      const pw=Math.max(48+prog*(W-48),48);
+      const ph=Math.max(72+prog*(H-72),72);
+      const ppx=(W-pw)/2,ppy=(H-ph)/2;
+      cx.fillStyle='#111';cx.beginPath();cx.roundRect(ppx,ppy,pw,ph,Math.max(2,7*(1-prog)));cx.fill();
+      cx.fillStyle='#1a1a1a';cx.beginPath();cx.roundRect(ppx+2,ppy+2,pw-4,ph-4,Math.max(1,5*(1-prog)));cx.fill();
+    } else {
+      // 핸드폰 UI 꽉참
+      // 배경
+      cx.fillStyle='#111';cx.fillRect(0,0,W,H);
+      // 상단바
+      const gradTop=cx.createLinearGradient(0,0,0,50);
+      gradTop.addColorStop(0,'#1a1a2e');gradTop.addColorStop(1,'#111');
+      cx.fillStyle=gradTop;cx.fillRect(0,0,W,50);
+      // 카카오워크 로고느낌
+      cx.fillStyle='#f7e600';cx.beginPath();cx.roundRect(W/2-38,8,76,22,5);cx.fill();
+      cx.fillStyle='#111';cx.font='bold 12px sans-serif';cx.textAlign='center';cx.fillText('KakaoWork',W/2,23);
+      cx.fillStyle='#888';cx.font='11px sans-serif';cx.textAlign='center';cx.fillText('팀장 박부장 ● 온라인',W/2,42);
+      // 구분선
+      cx.fillStyle='#222';cx.fillRect(0,50,W,2);
+      // 채팅 배경
+      cx.fillStyle='#1a1a1a';cx.fillRect(0,52,W,H-52);
+
+      // 내 메시지
+      cx.font='14px sans-serif'; // measureText용 폰트 먼저 설정
+      const myFull=goStory.me;
+      if(goTypedMe.length<myFull.length){
+        if(goT%2===0)goTypedMe=myFull.slice(0,goTypedMe.length+1);
+      }
+      const myH=drawMsgBubble(goTypedMe,true,70);
+
+      // 읽음 표시
+      if(goTypedMe===myFull){
+        cx.fillStyle='#888';cx.font='10px sans-serif';cx.textAlign='right';
+        cx.fillText('읽음 1',W-46,70+myH+4);
+        if(goPhase===1){goPhase=2;goT=0;}
+      }
+
+      // 상사 메시지 (내 메시지 타이핑 완료 후)
+      if(goPhase>=2){
+        // 타이핑 중 점 표시
+        const bossFull=goStory.boss;
+        if(goTypedBoss.length<bossFull.length){
+          if(goT>20&&goT%2===0)goTypedBoss=bossFull.slice(0,goTypedBoss.length+1);
+          if(goT<=20){
+            // 상사 타이핑 중 점 애니
+            const dd=Math.floor(goT/5)%4;
+            cx.fillStyle='#555';cx.beginPath();cx.roundRect(46,70+myH+24,60,30,8);cx.fill();
+            cx.fillStyle='#aaa';cx.font='bold 16px sans-serif';cx.textAlign='left';
+            cx.fillText('• '.repeat(dd).trim(),56,70+myH+44);
+          }
+        }
+        if(goTypedBoss.length>0){
+          cx.font='14px sans-serif';
+          drawMsgBubble(goTypedBoss,false,70+myH+24);
+        }
+        if(goTypedBoss===bossFull&&goPhase===2)goPhase=3;
+      }
+
+      // 최종: 다시시작 안내
+      if(goPhase===3){
+        cx.fillStyle='rgba(0,0,0,0.82)';cx.fillRect(0,H-80,W,80);
+        cx.fillStyle='#aaa';cx.font='12px sans-serif';cx.textAlign='center';
+        cx.fillText('탑승 '+S.score+'회 완료 | 스테이지 '+S.stage+'까지 진행',W/2,H-52);
+        cx.fillStyle='#f7e600';cx.font='bold 14px sans-serif';
+        cx.fillText('아래 버튼으로 다시 출근하세요! 🚌',W/2,H-26);
+      }
+    }
+  }
+
+  goRaf=requestAnimationFrame(goLoop);
+}
+
+// ── 입력 ──────────────────────────────────────────
+function onSpace(up){
+  const st=S.state;
+  if(up)return;
+  if(st==='boarding'){S.jumpVY=-16;S.state='jumping';}
+  else if(st==='fail_board'){newS(false);S.state='boarding';raf=requestAnimationFrame(loop);}
+  else if(st==='card'&&!S.cardResult){
+    if(Math.abs(S.cardX-RDR_X)<14){S.cardResult='ok';S.cardDoneT=0;S.flashC='rgba(39,174,96,0.3)';S.flash=0.5;}
+    else{S.cardResult='miss';S.flashC='rgba(220,50,50,0.32)';S.flash=0.6;setTimeout(()=>getHit(),800);}
+  }
+  else if(st==='bell'&&!S.bellResult){
+    const barW=W-130,zoneW=Math.max(45,75-S.cfg.bellDiff*35);
+    const px=S.bellPos/100*barW,zx=S.bellZone*(barW/100);
+    if(px>=zx&&px<=zx+zoneW){S.bellResult='ok';S.bellDoneT=0;}
+    else{S.bellResult=px<zx?'miss-early':'miss-late';S.flashC='rgba(220,50,50,0.32)';S.flash=0.6;setTimeout(()=>getHit(),800);}
+  }
+  else if(st==='seat'&&S.seatPhase===0){
+    S.seatMyX=Math.max(S.seatTargetX+20,S.seatMyX-14);
+  }
+}
+
+function onLeft(){
+  if(S.state==='elbow'&&S.elbowDir<0&&!S.elbowResult){S.elbowResult='ok';S.elbowT=0;}
+  if(S.state==='balance'&&S.balShown&&!S.balFailed&&S.balRound<3){
+    if(S.balDir>0){balSuccess();}else{balWrong();}
+  }
+}
+function onRight(){
+  if(S.state==='elbow'&&S.elbowDir>0&&!S.elbowResult){S.elbowResult='ok';S.elbowT=0;}
+  if(S.state==='balance'&&S.balShown&&!S.balFailed&&S.balRound<3){
+    if(S.balDir<0){balSuccess();}else{balWrong();}
+  }
+}
+function onDown(){
+  if(S.state==='thug'&&S.thugPhase===1){S.ducking=true;S.dodged=true;}
+  if(S.state==='seat'&&S.seatPhase===1){S.seatPhase=2;S.seatMyX=S.seatTargetX;S.seatDoneT=0;S.flash=0.5;S.flashC='rgba(39,174,96,0.3)';hint('자리 차지! 😎');}
+}
+
+function balSuccess(){
+  S.balRound++;S.balShown=false;S.balT=0;S.pulse=0;
+  S.flash=0.3;S.flashC='rgba(39,174,96,0.3)';
+  if(S.balRound>=3){hint('균형 완료! 👍');}
+  else{hint('좋아! '+S.balRound+'/3 — 계속!');}
+}
+function balWrong(){
+  S.balFailed=true;S.flash=0.85;S.flashC='rgba(220,50,50,0.42)';
+  setTimeout(()=>getHit(),700);
+}
+
+// 치트
+function cheatTo(n){
+  cancelAnimationFrame(raf);if(S.lives<1)S.lives=3;S.flash=0;
+  newS(false);S.stage=Math.max(S.stage,1);
+  const map={1:'boarding',2:'card',3:'bell',4:'seat',5:'balance',6:'thug',7:'elbow'};
+  S.state=map[n]||'boarding';
+  if(n===2){S.cardX=CHAR_X-60;S.cardDir=-1;S.cardT=0;S.cardResult=null;S.cardDoneT=0;hint('카드 태그!');}
+  if(n===3){S.bellPos=0;S.bellZone=30;S.bellT=0;S.bellResult=null;S.bellDoneT=0;hint('초록 구간 Space!');}
+  if(n===4){S.seatT=0;S.seatMyX=W*0.72;S.seatNpcX=W*0.08;S.seatTargetX=W*0.42;S.seatPhase=0;S.seatNpcSpeed=0.55;S.seatDoneT=0;hint('Space 연타 → ↓ 앉기!');}
+  if(n===5){S.balRound=0;S.balDir=0;S.balT=0;S.balShown=false;S.balDoneT=0;S.balFailed=false;hint('버스 기울기 반대 방향!');}
+  if(n===6){S.thugPhase=0;S.thugT=0;S.ducking=false;S.dodged=false;hint('↓ 피하기!');}
+  if(n===7){S.elbowDir=Math.random()<0.5?-1:1;S.elbowT=0;S.elbowResult=null;hint((S.elbowDir<0?'←':'→')+' 회피!');}
+  updHUD();raf=requestAnimationFrame(loop);
+}
+
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){e.preventDefault();onSpace(false);}
+  if(e.code==='ArrowLeft'){e.preventDefault();onLeft();}
+  if(e.code==='ArrowRight'){e.preventDefault();onRight();}
+  if(e.code==='ArrowDown'){e.preventDefault();onDown();}
+  if(e.key==='1')cheatTo(1);if(e.key==='2')cheatTo(2);if(e.key==='3')cheatTo(3);
+  if(e.key==='4')cheatTo(4);if(e.key==='5')cheatTo(5);if(e.key==='6')cheatTo(6);if(e.key==='7')cheatTo(7);
+});
+document.addEventListener('keyup',e=>{if(e.code==='Space')onSpace(true);});
+
+// 터치 버튼
+const spaceEl=document.getElementById('btn-space');
+spaceEl.addEventListener('touchstart',e=>{e.preventDefault();spaceEl.classList.add('pressed');onSpace(false);},{passive:false});
+spaceEl.addEventListener('touchend',e=>{e.preventDefault();spaceEl.classList.remove('pressed');onSpace(true);},{passive:false});
+spaceEl.addEventListener('mousedown',()=>{spaceEl.classList.add('pressed');onSpace(false);});
+spaceEl.addEventListener('mouseup',()=>{spaceEl.classList.remove('pressed');onSpace(true);});
+function setupBtn(id,fn){
+  const el=document.getElementById(id);if(!el)return;
+  el.addEventListener('touchstart',e=>{e.preventDefault();el.classList.add('pressed');fn();},{passive:false});
+  el.addEventListener('touchend',e=>{e.preventDefault();el.classList.remove('pressed');},{passive:false});
+  el.addEventListener('mousedown',()=>{el.classList.add('pressed');fn();});
+  el.addEventListener('mouseup',()=>el.classList.remove('pressed'));
+}
+setupBtn('btn-left',onLeft);
+setupBtn('btn-right',onRight);
+setupBtn('btn-down',onDown);
+
+function startGame(){
+  newS(true);updHUD();  // newS(true)가 stage=1 포함해서 완전 리셋
+  document.getElementById('sbtn').style.display='none';
+  cancelAnimationFrame(raf);S.state='boarding';raf=requestAnimationFrame(loop);
+}
+function copyLink(){
+  const url=window.location.href;
+  try{navigator.clipboard.writeText(url);}catch(e){const t=document.createElement('textarea');t.value=url;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);}
+  const toast=document.getElementById('toast');toast.style.opacity='1';setTimeout(()=>toast.style.opacity='0',2500);
+}
+
+updHUD();
+drawOutdoor();
+cx.fillStyle='rgba(0,0,0,0.52)';cx.fillRect(W/2-205,H/2-58,410,116);
+cx.fillStyle='#fff';cx.font='bold 22px sans-serif';cx.textAlign='center';cx.fillText('🚌 한국 버스 타기 게임',W/2,H/2-18);
+cx.font='14px sans-serif';cx.fillStyle='#ccc';
+cx.fillText('버스에 타고 미니게임을 클리어하세요!',W/2,H/2+8);
+cx.fillText('게임 시작 버튼을 눌러주세요',W/2,H/2+30);
+</script>
+</body>
+</html>
